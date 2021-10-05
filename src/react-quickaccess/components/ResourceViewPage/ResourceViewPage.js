@@ -3,6 +3,7 @@ import Transition from 'react-transition-group/Transition';
 import PropTypes from "prop-types";
 import {Trans, withTranslation} from "react-i18next";
 import {withAppContext} from "../../contexts/AppContext";
+import authenticator from 'authenticator';
 
 class ResourceViewPage extends React.Component {
   constructor(props) {
@@ -16,8 +17,10 @@ class ResourceViewPage extends React.Component {
     this.handleGoBackClick = this.handleGoBackClick.bind(this);
     this.handleCopyLoginClick = this.handleCopyLoginClick.bind(this);
     this.handleCopyPasswordClick = this.handleCopyPasswordClick.bind(this);
+    this.handleCopyTwoFactorClick = this.handleCopyTwoFactorClick.bind(this);
     this.handleGoToUrlClick = this.handleGoToUrlClick.bind(this);
     this.handleUseOnThisTabClick = this.handleUseOnThisTabClick.bind(this);
+    this.handleViewPasswordButtonClick = this.handleViewPasswordButtonClick.bind(this);
     this.handleViewPasswordButtonClick = this.handleViewPasswordButtonClick.bind(this);
   }
 
@@ -28,9 +31,12 @@ class ResourceViewPage extends React.Component {
       usingOnThisTab: false,
       copySecretState: "default",
       copyLoginState: "default",
+      copyTwoFactorState: "default",
       useOnThisTabError: "",
       previewedPassword: null,
-      isSecretDecrypting: false // if the secret is decrypting
+      previewedTwoFactor: null,
+      isSecretDecrypting: false, // if the secret is decrypting
+      isTwoFactorDecrypting: false
     };
   }
 
@@ -97,10 +103,24 @@ class ResourceViewPage extends React.Component {
   }
 
   /**
+   * Handle copy two factor.
+   */
+  async handleCopyTwoFactorClick() {
+    await this.copyTwoFactorToClipboard();
+  }
+
+  /**
    * Handle preview password button click.
    */
   async handleViewPasswordButtonClick() {
     await this.togglePreviewPassword();
+  }
+
+  /**
+   * Handle preview two-factor button click.
+   */
+  async handleViewTwoFactorButtonClick() {
+    await this.togglePreviewTwoFactor();
   }
 
   /**
@@ -136,6 +156,39 @@ class ResourceViewPage extends React.Component {
   }
 
   /**
+   * Copy the resource two factor to clipboard.
+   * @returns {Promise<void>}
+   */
+  async copyTwoFactorToClipboard() {
+    const isPasswordPreviewed = this.isPasswordPreviewed();
+    let password;
+
+    this.resetError();
+    this.setState({copyTwoAuthState: 'processing'});
+
+    if (isPasswordPreviewed) {
+      password = this.state.previewedPassword;
+    } else {
+      try {
+        const plaintext = await this.decryptResourceSecret(this.state.resource.id);
+        password = this.extractPlaintextPassword(plaintext);
+      } catch (error) {
+        if (error.name !== "UserAbortsOperationError") {
+          this.setState({copy: 'default'});
+          return;
+        }
+      }
+    }
+    const totpCode = authenticator(password);
+
+    await navigator.clipboard.writeText(totpCode);
+    this.setState({copyTwoAuthState: 'done'});
+    setTimeout(() => {
+      this.setState({copyTwoAuthState: 'default'});
+    }, 15000);
+  }
+
+  /**
    * Toggle preview password
    * @returns {Promise<void>}
    */
@@ -149,10 +202,30 @@ class ResourceViewPage extends React.Component {
   }
 
   /**
+   * Toggle preview two factor
+   * @returns {Promise<void>}
+   */
+  async togglePreviewTwoFactor() {
+    const isTwoFactorPreviewed = this.isTwoFactorPreviewed();
+    if (isTwoFactorPreviewed) {
+      this.hidePreviewedTwoFactor();
+    } else {
+      await this.previewTwoFactor();
+    }
+  }
+
+  /**
    * Hide the previewed resource password.
    */
   hidePreviewedPassword() {
     this.setState({previewedPassword: null});
+  }
+
+  /**
+   * Hide the previewed resource two-factor.
+   */
+  hidePreviewedTwoFactor() {
+    this.setState({previewedTwoFactor: null});
   }
 
   /**
@@ -171,6 +244,28 @@ class ResourceViewPage extends React.Component {
       this.setState({previewedPassword, isSecretDecrypting: false});
     } catch (error) {
       await this.setState({isSecretDecrypting: false});
+      if (error.name !== "UserAbortsOperationError") {
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * Preview two factor
+   * @returns {Promise<void>}
+   */
+  async previewTwoFactor() {
+    const resourceId = this.state.resource.id;
+    let previewedTwoFactor;
+
+    await this.setState({isTwoFactorDecrypting: true});
+
+    try {
+      const plaintext = await this.decryptResourceSecret(resourceId);
+      previewedTwoFactor = totp(this.extractPlaintextPassword(plaintext));
+      this.setState({previewedTwoFactor, isTwoFactorDecrypting: false});
+    } catch (error) {
+      await this.setState({isTwoFactorDecrypting: false});
       if (error.name !== "UserAbortsOperationError") {
         throw error;
       }
@@ -271,6 +366,14 @@ class ResourceViewPage extends React.Component {
    */
   isPasswordPreviewed() {
     return this.state.previewedPassword !== null;
+  }
+
+  /**
+   * Check if the two factor is previewed
+   * @returns {boolean}
+   */
+  isTwoFactorPreviewed() {
+    return this.state.previewedTwoFactor !== null;
   }
 
   /**
@@ -382,6 +485,60 @@ class ResourceViewPage extends React.Component {
                 <Transition in={this.state.isSecretDecrypting} appear={true} timeout={500}>
                   {status => (
                     <svg className={`fade-${status} ${!this.state.isSecretDecrypting ? "visually-hidden" : ""}`} width="22px" height="22px" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg"><g stroke="none" fill="none" ><g id="loading_white" transform="translate(2, 2)" strokeWidth="4"><circle id="Oval" stroke="#CCC" cx="9" cy="9" r="9" /></g><g id="loading_white" transform="translate(2, 2)" strokeWidth="2"><path d="M18,9 C18,4.03 13.97,0 9,0" id="Shape" stroke="#000"><animateTransform attributeName="transform" type="rotate" from="0 9 9" to="360 9 9" dur="0.35s" repeatCount="indefinite" /></path></g></g></svg>
+                  )}
+                </Transition>
+              </span>
+              <span className="visually-hidden">view</span>
+            </a>
+            }
+          </li>
+          <li className="property">
+            <a role="button" className="button button-icon property-action" onClick={this.handleCopyTwoFactorClick} title={this.translate("copy to clipboard")}>
+              <span className="fa icon">
+                <Transition in={this.state.copyTwoAuthState === "default"} appear={false} timeout={500}>
+                  {status => (
+                    <svg className={`transition fade-${status} ${this.state.copyTwoAuthState !== "default" ? "visually-hidden" : ""}`} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><path d="M336 64h-80c0-35.29-28.71-64-64-64s-64 28.71-64 64H48C21.49 64 0 85.49 0 112v352c0 26.51 21.49 48 48 48h288c26.51 0 48-21.49 48-48V112c0-26.51-21.49-48-48-48zm-6 400H54a6 6 0 0 1-6-6V118a6 6 0 0 1 6-6h42v36c0 6.627 5.373 12 12 12h168c6.627 0 12-5.373 12-12v-36h42a6 6 0 0 1 6 6v340a6 6 0 0 1-6 6zM192 40c13.255 0 24 10.745 24 24s-10.745 24-24 24-24-10.745-24-24 10.745-24 24-24" /></svg>
+                  )}
+                </Transition>
+                <Transition in={this.state.copyTwoAuthState === "processing"} appear={true} timeout={500}>
+                  {status => (
+                    <svg className={`fade-${status} ${this.state.copyTwoAuthState !== "processing" ? "visually-hidden" : ""}`} width="22px" height="22px" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg"><g stroke="none" fill="none" ><g id="loading_white" transform="translate(2, 2)" strokeWidth="4"><circle id="Oval" stroke="#CCC" cx="9" cy="9" r="9" /></g><g id="loading_white" transform="translate(2, 2)" strokeWidth="2"><path d="M18,9 C18,4.03 13.97,0 9,0" id="Shape" stroke="#000"><animateTransform attributeName="transform" type="rotate" from="0 9 9" to="360 9 9" dur="0.35s" repeatCount="indefinite" /></path></g></g></svg>
+                  )}
+                </Transition>
+                <Transition in={this.state.copyTwoAuthState === "done"} appear={true} timeout={500}>
+                  {status => (
+                    <svg className={`fade-${status} ${this.state.copyTwoAuthState !== "done" ? "visually-hidden" : ""}`} xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false" data-prefix="fas" data-icon="check" role="img" viewBox="0 0 512 512"><path fill="currentColor" d="M173.898 439.404l-166.4-166.4c-9.997-9.997-9.997-26.206 0-36.204l36.203-36.204c9.997-9.998 26.207-9.998 36.204 0L192 312.69 432.095 72.596c9.997-9.997 26.207-9.997 36.204 0l36.203 36.204c9.997 9.997 9.997 26.206 0 36.204l-294.4 294.401c-9.998 9.997-26.207 9.997-36.204-.001z" /></svg>
+                  )}
+                </Transition>
+              </span>
+              <span className="visually-hidden"><Trans>Copy to clipboard</Trans></span>
+            </a>
+            <span className="property-name">TwoFactor</span>
+            <a href="#" role="button"
+              className={`property-value secret ${isPasswordPreviewed ? "decrypted" : "secret-copy"}`}
+              title={isPasswordPreviewed ? this.state.previewedPassword : "two-factor"}
+              onClick={this.handleCopyPasswordClick}>
+              {isPasswordPreviewed &&
+              <span>{this.state.previewedPassword}</span>
+              }
+              {!isPasswordPreviewed &&
+              <span className="visually-hidden"><Trans>Copy to clipboard</Trans></span>
+              }
+            </a>
+            {this.canUsePreviewPassword &&
+            <a onClick={this.handleViewTwoFactorButtonClick}
+              className={`password-view button button-icon button-toggle ${isPasswordPreviewed ? "selected" : ""} ${this.state.isTwoFactorDecrypting ? "disabled" : ""}`}>
+              <span className="fa icon">
+                <Transition in={!this.state.isTwoFactorDecrypting} appear={false} timeout={500}>
+                  {status => (
+                    <svg className={`transition fade-${status} ${this.state.isTwoFactorDecrypting ? "visually-hidden" : ""}`} viewBox="0 0 1792 1792" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M1664 960q-152-236-381-353 61 104 61 225 0 185-131.5 316.5t-316.5 131.5-316.5-131.5-131.5-316.5q0-121 61-225-229 117-381 353 133 205 333.5 326.5t434.5 121.5 434.5-121.5 333.5-326.5zm-720-384q0-20-14-34t-34-14q-125 0-214.5 89.5t-89.5 214.5q0 20 14 34t34 14 34-14 14-34q0-86 61-147t147-61q20 0 34-14t14-34zm848 384q0 34-20 69-140 230-376.5 368.5t-499.5 138.5-499.5-139-376.5-368q-20-35-20-69t20-69q140-229 376.5-368t499.5-139 499.5 139 376.5 368q20 35 20 69z"/>
+                    </svg>
+                  )}
+                </Transition>
+                <Transition in={this.state.isTwoFactorDecrypting} appear={true} timeout={500}>
+                  {status => (
+                    <svg className={`fade-${status} ${!this.state.isTwoFactorDecrypting ? "visually-hidden" : ""}`} width="22px" height="22px" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg"><g stroke="none" fill="none" ><g id="loading_white" transform="translate(2, 2)" strokeWidth="4"><circle id="Oval" stroke="#CCC" cx="9" cy="9" r="9" /></g><g id="loading_white" transform="translate(2, 2)" strokeWidth="2"><path d="M18,9 C18,4.03 13.97,0 9,0" id="Shape" stroke="#000"><animateTransform attributeName="transform" type="rotate" from="0 9 9" to="360 9 9" dur="0.35s" repeatCount="indefinite" /></path></g></g></svg>
                   )}
                 </Transition>
               </span>
